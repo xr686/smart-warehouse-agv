@@ -17,6 +17,14 @@
 
 ---
 
+<div align="center">
+<img src="docs/images/agv_final_full.jpg" width="720" alt="智能仓储 AGV 最终实机完整图" />
+<br/>
+<em>最终实机完整图</em>
+</div>
+
+---
+
 ## 关于这个项目
 
 这是我独立设计、搭建并调试完成的一台智能仓储 AGV 底盘。它以 **NVIDIA Jetson Xavier NX** 为主控，在 **ROS 2 Foxy** 上跑通完整的自主导航链路：**Cartographer** 实时建图、**Nav2** 定位与路径规划、**镭神 N10P 激光雷达**感知环境。
@@ -107,6 +115,7 @@
 | `hardware/BOM.md` | 硬件清单与关键电气参数（含载板接口占用明细） |
 | `docs/operation-manual.md` | 操作手册：建图 / 导航 / 最终版一键启动的全部终端命令 |
 | `docs/maps/` | 历史地图文件（yaml + pgm/png，v1~v4） |
+| `docs/images/` | 实机照片 |
 | `scripts/` | 便捷启动脚本（建图 / 导航） |
 
 ## 依赖环境

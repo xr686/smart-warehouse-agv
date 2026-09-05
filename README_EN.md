@@ -17,6 +17,14 @@
 
 ---
 
+<div align="center">
+<img src="docs/images/agv_final_full.jpg" width="720" alt="Final full view of the completed AGV" />
+<br/>
+<em>Final full view of the completed AGV</em>
+</div>
+
+---
+
 ## About This Project
 
 This is a smart warehouse AGV chassis I designed, built and tuned end-to-end myself. It runs on an **NVIDIA Jetson Xavier NX** with a full **ROS 2 Foxy** autonomy stack: **Cartographer** for real-time mapping, **Nav2** for localization and path planning, and a **LeiShen N10P TOF LiDAR** for environment perception.
@@ -107,6 +115,7 @@ This is the 4th-iteration map I built with Cartographer in my own environment �
 | `hardware/BOM.md` | Bill of materials and key electrical parameters (incl. carrier-board pinout) |
 | `docs/operation-manual.md` | Operation manual: mapping / navigation / final one-click startup — every terminal command |
 | `docs/maps/` | Historical map files (yaml + pgm/png, v1–v4) |
+| `docs/images/` | Photos of the finished robot |
 | `scripts/` | Convenience launch scripts (mapping / navigation) |
 
 ## Requirements
