@@ -11,20 +11,23 @@ from tf2_ros import TransformBroadcaster
 class AGVBaseNode(Node):
     def __init__(self):
         super().__init__('agv_base_node')
-        
-        # 1. 机器人真实物理参数 (已更新为你提供的数据)
-        self.wheel_radius = 0.05   # 轮子半径：5cm = 0.05m
-        self.wheel_base = 0.287    # 轮距：28.7cm = 0.287m
-        
-        # 2. 串口配置
-        self.port = '/dev/ttyACM0'
-        self.baudrate = 115200
-        try:
-            self.serial = serial.Serial(self.port, self.baudrate, timeout=0.02)
-            self.get_logger().info(f"成功连接到串口: {self.port}")
-        except Exception as e:
-            self.get_logger().error(f"串口连接失败: {e}")
-            return
+
+        # 1. 机器人真实物理参数（DDSM115 轮毂电机直径 115mm → 半径 0.0575m）
+        self.declare_parameter('wheel_radius', 0.0575)
+        self.declare_parameter('wheel_base', 0.287)
+        self.wheel_radius = self.get_parameter('wheel_radius').value
+        self.wheel_base = self.get_parameter('wheel_base').value
+
+        # 2. 串口配置（可用 ROS 参数或环境变量覆盖，不再硬编码）
+        self.declare_parameter('serial_port', '/dev/ttyACM0')
+        self.declare_parameter('baudrate', 115200)
+        # cmd_vel 超时保护：超过该秒数未收到新指令自动刹停（0 表示禁用）
+        self.declare_parameter('cmd_vel_timeout', 0.5)
+        self.port = self.get_parameter('serial_port').value
+        self.baudrate = self.get_parameter('baudrate').value
+        self.cmd_vel_timeout = self.get_parameter('cmd_vel_timeout').value
+        self.serial = None
+        self._connect_serial()
 
         self.crc8_func = crcmod.predefined.mkCrcFun('crc-8-maxim')
         
@@ -37,6 +40,7 @@ class AGVBaseNode(Node):
         self.odom_y = 0.0
         self.odom_th = 0.0
         self.last_time = self.get_clock().now()
+        self.last_cmd_time = None
         
         # 4. ROS2 话题与 TF 广播器声明
         self.subscription = self.create_subscription(Twist, 'cmd_vel', self.cmd_vel_callback, 10)
@@ -46,10 +50,20 @@ class AGVBaseNode(Node):
         # 5. 核心控制与读取循环 (20Hz)
         self.timer = self.create_timer(0.05, self.control_loop)
 
+    def _connect_serial(self):
+        """尝试打开串口；失败不退出，control_loop 里会周期重连"""
+        try:
+            self.serial = serial.Serial(self.port, self.baudrate, timeout=0.02)
+            self.get_logger().info(f"成功连接到串口: {self.port}")
+        except Exception as e:
+            self.serial = None
+            self.get_logger().error(f"串口连接失败: {e}（将每 2 秒自动重试）")
+
     def cmd_vel_callback(self, msg):
         """将 ROS2 的 Twist 速度指令转化为目标 RPM"""
         linear_x = msg.linear.x
         angular_z = msg.angular.z
+        self.last_cmd_time = time.time()
         
         v_left = linear_x - (angular_z * self.wheel_base / 2.0)
         v_right = linear_x + (angular_z * self.wheel_base / 2.0)
@@ -60,6 +74,20 @@ class AGVBaseNode(Node):
     def control_loop(self):
         """主循环：发命令 -> 读反馈 -> 算里程 -> 发布"""
         current_time = self.get_clock().now()
+
+        # 串口掉线自动重连（拔插 USB 后无需重启节点）
+        if self.serial is None:
+            self._connect_serial()
+            if self.serial is None:
+                return
+
+        # cmd_vel 超时保护：失联即刹停，防止前端断连后小车失控狂奔
+        if (self.cmd_vel_timeout > 0 and self.last_cmd_time is not None
+                and time.time() - self.last_cmd_time > self.cmd_vel_timeout
+                and (self.target_left_rpm or self.target_right_rpm)):
+            self.get_logger().warning("cmd_vel 超时，自动刹停")
+            self.target_left_rpm = 0
+            self.target_right_rpm = 0
         
         # 1. 同步轮询电机 1 (左轮)
         self.send_speed_command(1, self.target_left_rpm)
@@ -101,6 +129,8 @@ class AGVBaseNode(Node):
 
     def send_speed_command(self, motor_id, rpm):
         """发送十六进制速度指令"""
+        if self.serial is None:
+            return
         rpm = max(-330, min(330, rpm))
         if rpm < 0:
             rpm = (1 << 16) + rpm
@@ -116,6 +146,8 @@ class AGVBaseNode(Node):
 
     def read_feedback(self, expected_id):
         """读取10字节返回帧并解析速度(带异常保护)"""
+        if self.serial is None:
+            return None
         start_time = time.time()
         buffer = []
         while time.time() - start_time < 0.02:
@@ -137,6 +169,11 @@ class AGVBaseNode(Node):
             except Exception as e:
                 # 就算串口被拔掉或空转报错，也只打印警告，绝不崩溃！
                 self.get_logger().warning(f"串口读取异常: {e}")
+                try:
+                    self.serial.close()
+                except Exception:
+                    pass
+                self.serial = None  # 下个周期 control_loop 自动重连
                 return None
         return None
 

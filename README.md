@@ -168,6 +168,8 @@ ros2 launch rosbridge_server rosbridge_websocket_launch.xml
 - The default AGV IP `192.168.1.100` in `frontend/index.html` is an example address — change it in the page to your own device IP; `192.168.42.1` is the reCamera's factory-default USB RNDIS address.
 - `x11vnc -nopw` and `chmod 777 /dev/ttyACM*` in the scripts are isolated-LAN debug steps; before deploying to a non-isolated network, set a VNC password and manage serial permissions via udev rules instead of chmod.
 - `ros2_ws/src/lslidar_driver` and `lslidar_msgs` are LeiShen's official driver sources, © their original authors, included verbatim for build reproducibility.
+- Nav2 runs with **stock `nav2_bringup` default parameters** (no custom AMCL/costmap/DWB YAML in this repo); the tuning described in the accompanying thesis was done experimentally on the robot and is not persisted here.
+- `base_node` accepts ROS parameters: `serial_port` (default `/dev/ttyACM0`), `baudrate`, `wheel_radius` (default `0.0575` m for the 115 mm DDSM115 wheel), `wheel_base`, `cmd_vel_timeout` (default `0.5` s — auto brake when no new `cmd_vel` arrives; set `0` to disable). `web_backend` accepts `map_file` (default matches `scripts/navigation.sh`, i.e. `my_room_map_v4.yaml`).
 
 ## License
 

@@ -168,6 +168,8 @@ ros2 launch rosbridge_server rosbridge_websocket_launch.xml
 - `frontend/index.html` 中 AGV IP 输入框的默认值 `192.168.1.100` 是示例地址，使用前请在页面内改成你自己设备的实际 IP；`192.168.42.1` 是 reCamera USB RNDIS 虚拟网卡的出厂默认地址。
 - 脚本中的 `x11vnc -nopw`、`chmod 777 /dev/ttyACM*` 是隔离局域网内的调试操作；部署到非隔离网络前，请自行设置 VNC 密码，并用 udev 规则替代 chmod 管理串口权限。
 - `ros2_ws/src/lslidar_driver`、`lslidar_msgs` 为镭神智能官方驱动源码，版权归原厂所有，随仓库原样收录仅用于构建复现。
+- Nav2 使用 **`nav2_bringup` 出厂默认参数**运行（仓库内无自定义 AMCL/代价地图/DWB 参数文件）；配套论文中描述的调参为实机试验过程，未持久化到本仓库。
+- `base_node` 支持 ROS 参数：`serial_port`（默认 `/dev/ttyACM0`）、`baudrate`、`wheel_radius`（默认 `0.0575` m，对应 DDSM115 的 115mm 轮径）、`wheel_base`、`cmd_vel_timeout`（默认 `0.5` 秒——超时未收到新 `cmd_vel` 自动刹停，设 `0` 禁用）。`web_backend` 支持 `map_file` 参数（默认与 `scripts/navigation.sh` 一致，即 `my_room_map_v4.yaml`）。
 
 ## 许可
 

@@ -11,6 +11,7 @@ class WebBackendNode(Node):
         # 监听来自网页的指令
         self.sub = self.create_subscription(String, '/web_cmd', self.cmd_callback, 10)
         self.current_process = None
+        self.declare_parameter('map_file', '')
         self.get_logger().info("🌐 Web后端中枢节点已启动，等待网页指令...")
 
     def cmd_callback(self, msg):
@@ -25,8 +26,14 @@ class WebBackendNode(Node):
         elif cmd == 'load_map':
             self.stop_current()
             self.get_logger().info("正在启动Nav2自动导航...")
-            # 注意：这里的路径一定要写对
-            map_path = os.path.expanduser('~/agv_ws/src/agv_slam/config/my_room_map_v2.yaml')
+            # 地图文件名可用 ROS 参数 map_file 或环境变量 AGV_MAP 覆盖，
+            # 默认与 scripts/navigation.sh 保持一致（v4）
+            ws = os.environ.get('AGV_WS', os.path.expanduser('~/agv_ws'))
+            map_file = self.get_parameter('map_file').value or os.environ.get('AGV_MAP', 'my_room_map_v4.yaml')
+            map_path = os.path.join(ws, 'src', 'agv_slam', 'config', map_file)
+            if not os.path.isfile(map_path):
+                self.get_logger().error(f"地图不存在: {map_path}，已取消启动导航")
+                return
             self.current_process = subprocess.Popen(['ros2', 'launch', 'nav2_bringup', 'bringup_launch.py', 'use_sim_time:=False', f'map:={map_path}'])
             
         elif cmd == 'stop_all':
