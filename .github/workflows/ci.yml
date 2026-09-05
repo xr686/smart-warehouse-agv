@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Python syntax check (py_compile)
+        run: |
+          find ros2_ws -name '*.py' -not -path '*/__pycache__/*' -print0 \
+            | xargs -0 -n1 python -m py_compile
+
+      - name: Shell script syntax check (bash -n)
+        run: |
+          for f in scripts/*.sh; do bash -n "$f"; done
+
+      - name: Validate JSON assets
+        run: |
+          python -c "import json; json.load(open('nodered/flows.json'))"
