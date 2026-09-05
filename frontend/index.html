@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<!--
+  ============================================================================
+  AGV 工业互联调度终端 HMI（前端页面）
+  ----------------------------------------------------------------------------
+  用途：浏览器端打开的 AGV 调度/监控单页应用，包含：
+    1) 基于 ROSLIB (rosbridge WebSocket) 的底盘遥控与状态同步；
+    2) 基于 noVNC 的 RViz2 高保真远程可视化（iframe 嵌入）；
+    3) 边缘视觉安防（reCamera + YOLO11n + Node-RED）实时视频流与历史抓拍库。
+  运行前提（在 Jetson NX 主控上）：
+    - rosbridge：ros2 launch rosbridge_server rosbridge_websocket_launch.xml   # ws://<NX_IP>:9090
+    - 远程桌面：x11vnc -display :1 -auth ~/.Xauthority -nopw -forever -shared -bg
+                /usr/share/novnc/utils/launch.sh --vnc localhost:5901 --listen 6080
+    - Node-RED / 视觉 API 运行在 reCamera（默认 192.168.42.1，USB RNDIS 直连）
+  页面内需将 IP 地址配置为实际设备地址（rosbridge 9090 / noVNC 6080 / reCamera 8090 等）。
+  ============================================================================
+-->
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>仓储 AGV - 工业互联调度终端 (HMI)</title>
+    <script src="https://cdn.jsdelivr.net/npm/eventemitter2@6.4.9/lib/eventemitter2.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/roslib@1/build/roslib.min.js"></script>
+
+    <style>
+        :root {
+            --bg-dark: #0f172a; --bg-panel: #1e293b; --brand-orange: #f97316; 
+            --brand-blue: #0284c7; --text-main: #f1f5f9; --border-color: #334155;
+        }
+        body { font-family: 'Segoe UI', system-ui, sans-serif; background-color: var(--bg-dark); color: var(--text-main); margin: 0; padding: 0; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+        
+        .header { background: #000; border-bottom: 2px solid var(--brand-orange); padding: 12px 24px; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 4px 12px rgba(0,0,0,0.5); z-index: 10; }
+        .logo-title { font-size: 20px; font-weight: 800; display: flex; align-items: center; gap: 10px;}
+        .logo-title::before { content: ""; display: inline-block; width: 12px; height: 12px; background: var(--brand-orange); border-radius: 2px; }
+        .conn-group { display: flex; align-items: center; gap: 10px; background: var(--bg-panel); padding: 6px 12px; border-radius: 6px; border: 1px solid var(--border-color);}
+        .ip-input { background: transparent; border: none; color: #fff; font-size: 14px; width: 120px; outline: none; text-align: center; font-family: monospace; border-bottom: 1px solid #475569;}
+        .btn-conn { background: var(--brand-blue); color: white; border: none; padding: 6px 12px; border-radius: 4px; font-weight: bold; cursor: pointer; transition: 0.2s;}
+        .btn-conn:hover { background: #0369a1; }
+        .status-dot { width: 10px; height: 10px; border-radius: 50%; background: #ef4444; box-shadow: 0 0 8px #ef4444;}
+        .status-dot.connected { background: #22c55e; box-shadow: 0 0 8px #22c55e;}
+
+        .main-container { flex: 1; display: flex; flex-direction: column; padding: 20px; box-sizing: border-box; }
+        .tabs { display: flex; gap: 5px; margin-bottom: 15px; }
+        .tab { padding: 12px 25px; background: var(--bg-panel); color: #94a3b8; border: 1px solid var(--border-color); border-bottom: none; border-radius: 8px 8px 0 0; cursor: pointer; font-weight: bold; transition: 0.3s; }
+        .tab.active { background: var(--brand-orange); color: #fff; border-color: var(--brand-orange); }
+        .panel { display: none; flex: 1; background: var(--bg-panel); border: 1px solid var(--border-color); border-radius: 0 8px 8px 8px; padding: 20px; box-shadow: inset 0 0 20px rgba(0,0,0,0.5); }
+        .panel.active { display: flex; flex-direction: column; }
+
+        .manual-layout { display: grid; grid-template-columns: 320px 1fr; gap: 30px; height: 100%; align-items: stretch;}
+        .left-controls { display: flex; flex-direction: column; gap: 20px; justify-content: center; align-items: center;}
+        
+        .control-pendant { background: #2a374a; padding: 30px; border-radius: 50%; box-shadow: 10px 10px 30px rgba(0,0,0,0.5); border: 2px solid #3b4c63;}
+        .d-pad { display: grid; grid-template-columns: repeat(3, 70px); grid-template-rows: repeat(3, 70px); gap: 10px; }
+        .d-btn { background: linear-gradient(145deg, #3b4c63, #212c3d); color: #fff; border: none; border-radius: 12px; font-weight: bold; cursor: pointer; box-shadow: 4px 4px 10px rgba(0,0,0,0.5); transition: 0.1s; }
+        .d-btn:active, .d-btn.pressed { background: var(--brand-orange); transform: translateY(2px); }
+
+        .info-card { background: #000; border: 4px solid #334155; border-radius: 8px; padding: 15px; width: 100%; box-sizing: border-box;}
+        .info-card h4 { margin: 0 0 10px 0; color: #94a3b8; font-size: 14px;}
+        .data-row { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px; }
+        .data-value { font-family: monospace; font-size: 24px; color: #10b981; }
+
+        .vision-card { background: #000; border: 2px solid var(--border-color); border-radius: 8px; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 10px 20px rgba(0,0,0,0.5);}
+        .vision-header { background: #0f172a; padding: 10px 15px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-color); }
+        .vision-body { display: flex; flex-direction: row; flex: 1; padding: 10px; gap: 10px;}
+        
+        .native-stream-container { flex: 1; position: relative; background: #000; border: 1px solid #334155; border-radius: 6px; display: flex; justify-content: center; align-items: center; overflow: hidden; }
+        .stream-wrapper { position: relative; width: 100%; aspect-ratio: 16/9; max-height: 100%; }
+        .native-stream-img { width: 100%; height: 100%; display: block; object-fit: contain; }
+        .native-stream-svg { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+
+        .vision-controls { width: 180px; background: #1e293b; padding: 15px; display: flex; flex-direction: column; gap: 20px; align-items: center; border: 1px solid #334155; border-radius: 6px; box-sizing: border-box;}
+        
+        .alarm-box { text-align: center; width: 100%; background: #0f172a; padding: 10px; border-radius: 6px; border: 1px solid #334155; transition: 0.3s;}
+        .alarm-light { width: 40px; height: 40px; border-radius: 50%; border: 3px solid #334155; background: #475569; margin: 0 auto 10px; transition: 0.3s;}
+        .alarm-light.green-steady { background: #22c55e; box-shadow: 0 0 15px #22c55e; border-color: #166534;}
+        .alarm-light.red-flash { background: #ef4444; border-color: #991b1b; animation: flashRed 0.4s infinite; }
+        @keyframes flashRed { 0%, 100% { box-shadow: 0 0 30px #ef4444; opacity: 1; } 50% { box-shadow: 0 0 5px #ef4444; opacity: 0.5; } }
+        
+        .latest-photo-box { width: 100%; height: 120px; background: #000; border: 1px dashed #475569; border-radius: 6px; display: flex; justify-content: center; align-items: center; overflow: hidden; position: relative; flex-shrink: 0;}
+        .latest-photo-box img { width: 100%; height: 100%; object-fit: cover; cursor: pointer; transition: 0.2s;}
+        .latest-photo-box img:hover { transform: scale(1.05); }
+        .btn-gallery { width: 100%; background: #334155; color: white; border: 1px solid #475569; padding: 10px; border-radius: 4px; cursor: pointer; font-weight: bold; transition: 0.2s;}
+        .btn-gallery:hover { background: #475569; }
+
+        .nav-toolbar { display: flex; justify-content: space-between; align-items: center; background: #0f172a; padding: 10px 15px; border-radius: 6px 6px 0 0; border: 1px solid var(--border-color); border-bottom: none;}
+        #nav-iframe { flex: 1; width: 100%; border: 1px solid var(--border-color); border-radius: 0 0 6px 6px; background: #000;}
+
+        .e-stop-wrapper { position: fixed; bottom: 30px; right: 30px; display: flex; flex-direction: column; align-items: center; gap: 5px; z-index: 100;}
+        .e-stop { width: 90px; height: 90px; border-radius: 50%; background: radial-gradient(circle at 30% 30%, #ef4444, #b91c1c); border: 6px solid #facc15; box-shadow: 0 10px 0 #7f1d1d, 0 15px 20px rgba(0,0,0,0.6); color: white; font-weight: 900; font-size: 16px; cursor: pointer; transition: 0.1s; outline: none; }
+        .e-stop:active { box-shadow: 0 4px 0 #7f1d1d; transform: translateY(6px); }
+        .e-stop.locked { box-shadow: 0 2px 0 #7f1d1d; transform: translateY(8px); background: #b91c1c; border-color: #ca8a04; }
+
+        .modal { display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); }
+        .modal-content { background: #1e293b; margin: 3% auto; padding: 20px; border-radius: 8px; width: 85%; max-height: 85vh; overflow-y: auto; border: 1px solid #334155;}
+        .close { color: #94a3b8; font-size: 28px; font-weight: bold; cursor: pointer; float: right;}
+        .close:hover { color: #ef4444; }
+        .gallery-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 15px; margin-top: 20px;}
+        .gallery-item { background: #0f172a; padding: 10px; border-radius: 6px; text-align: center; border: 1px solid #334155;}
+        .gallery-item img { width: 100%; height: 160px; object-fit: cover; border-radius: 4px; margin-bottom: 8px; cursor: pointer; transition: 0.2s;}
+        .gallery-item img:hover { transform: scale(1.02); }
+        .gallery-item span { font-size: 12px; color: #94a3b8; word-break: break-all; }
+    </style>
+</head>
+<body onkeydown="handleKeyDown(event)" onkeyup="handleKeyUp(event)">
+
+    <div class="header">
+        <div class="logo-title">AGV 综合调度与安防终端</div>
+        <div class="conn-group">
+            <div id="status-dot" class="status-dot"></div>
+            <input type="text" id="agv-ip" class="ip-input" value="192.168.1.100" placeholder="AGV IP">
+            <button class="btn-conn" onclick="connectAGV()">连接底盘</button>
+        </div>
+    </div>
+
+    <div class="main-container">
+        <div class="tabs">
+            <div class="tab active" id="tab-manual" onclick="switchTab('manual')">🕹️ 驾驶与安防模式</div>
+            <div class="tab" id="tab-nav" onclick="switchTab('nav')">🗺️ SLAM 远程导航</div>
+        </div>
+
+        <div id="panel-manual" class="panel active">
+            <div class="manual-layout">
+                <div class="left-controls">
+                    <div class="control-pendant">
+                        <div class="d-pad">
+                            <div style="visibility:hidden"></div>
+                            <button class="d-btn" id="key-w" onmousedown="pubMove(0.3, 0)" onmouseup="pubStop()" ontouchstart="pubMove(0.3, 0)" ontouchend="pubStop()">W</button>
+                            <div style="visibility:hidden"></div>
+                            <button class="d-btn" id="key-a" onmousedown="pubMove(0, 0.6)" onmouseup="pubStop()" ontouchstart="pubMove(0, 0.6)" ontouchend="pubStop()">A</button>
+                            <button class="d-btn" id="key-s" onmousedown="pubMove(-0.3, 0)" onmouseup="pubStop()" ontouchstart="pubMove(-0.3, 0)" ontouchend="pubStop()">S</button>
+                            <button class="d-btn" id="key-d" onmousedown="pubMove(0, -0.6)" onmouseup="pubStop()" ontouchstart="pubMove(0, -0.6)" ontouchend="pubStop()">D</button>
+                        </div>
+                    </div>
+                    <div class="info-card">
+                        <h4>Odometry 状态</h4>
+                        <div class="data-row"><span style="color:#64748b; font-size:14px;">X (m)</span><span class="data-value" id="val-x">0.00</span></div>
+                        <div class="data-row"><span style="color:#64748b; font-size:14px;">Y (m)</span><span class="data-value" id="val-y">0.00</span></div>
+                    </div>
+                </div>
+
+                <div class="vision-card">
+                    <div class="vision-header">
+                        <span style="font-weight:bold; color:#cbd5e1;">👁️ reCamera AI 视觉原生监控流</span>
+                        <div class="conn-group" style="padding: 2px 8px; border:none;">
+                            <div id="vision-dot" class="status-dot"></div>
+                            <input type="text" id="camera-ip" class="ip-input" style="width:100px;" value="192.168.42.1" placeholder="相机 IP">
+                            <button class="btn-conn" style="padding: 4px 10px;" onclick="connectVision()">接入原生流</button>
+                        </div>
+                    </div>
+                    <div class="vision-body">
+                        <div class="native-stream-container">
+                            <div class="stream-wrapper">
+                                <img id="native-stream-img" class="native-stream-img">
+                                <svg id="native-stream-svg" viewBox="0 0 1920 1080" class="native-stream-svg"></svg>
+                            </div>
+                            <div id="stream-placeholder" style="position: absolute; color: #64748b; font-weight: bold;">等待视觉推流...</div>
+                        </div>
+
+                        <div class="vision-controls">
+                            <div class="alarm-box" id="alarm-box">
+                                <div class="alarm-light" id="alarm-light"></div>
+                                <span id="alarm-text" style="font-size: 13px; font-weight: bold; color: #94a3b8;">系统待机</span>
+                            </div>
+                            <div style="width:100%;">
+                                <div style="font-size: 12px; color: #94a3b8; margin-bottom: 5px;">最新入侵抓拍</div>
+                                <div class="latest-photo-box">
+                                    <span id="photo-placeholder" style="color:#475569; font-size:12px;">暂无抓拍</span>
+                                    <img id="latest-photo" src="" style="display:none;" onclick="window.open(this.src)">
+                                </div>
+                            </div>
+                            <button class="btn-gallery" onclick="openGallery()">📂 历史照片库</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="panel-nav" class="panel" style="padding: 10px;">
+            <div class="nav-toolbar">
+                <span style="font-weight:bold; color:#cbd5e1;">RViz2 高保真监控面板</span>
+                <button class="btn-conn" style="background:#334155; border:1px solid #475569;" onclick="openVNC()">🪟 新窗口全屏展开</button>
+            </div>
+            <iframe id="nav-iframe" src="about:blank"></iframe>
+        </div>
+    </div>
+
+    <div class="e-stop-wrapper">
+        <button class="e-stop" id="btn-estop" onclick="emergencyStop()">STOP</button>
+        <span style="font-size:12px; color:#facc15; font-weight:bold; background:rgba(0,0,0,0.8); padding:2px 6px; border-radius:4px;">急停 (Space)</span>
+    </div>
+
+    <div id="gallery-modal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="document.getElementById('gallery-modal').style.display='none'">&times;</span>
+            <h3 style="margin-top:0; color:#e2e8f0;">📷 历史入侵抓拍库</h3>
+            <div id="gallery-grid" class="gallery-grid"></div>
+        </div>
+    </div>
+
+    <script>
+        // ======= AGV 通信 =======
+        let ros = null; let cmdVel = null; let isEStop = false; let activeKeys = new Set();
+        function switchTab(mode) {
+            document.getElementById('tab-manual').className = 'tab' + (mode === 'manual' ? ' active' : '');
+            document.getElementById('tab-nav').className = 'tab' + (mode === 'nav' ? ' active' : '');
+            document.getElementById('panel-manual').className = 'panel' + (mode === 'manual' ? ' active' : '');
+            document.getElementById('panel-nav').className = 'panel' + (mode === 'nav' ? ' active' : '');
+            if (mode === 'nav') {
+                const ip = document.getElementById('agv-ip').value;
+                const iframe = document.getElementById('nav-iframe');
+                if (iframe.src.indexOf('about:blank') !== -1) { iframe.src = `http://${ip}:6080/vnc.html?autoconnect=true&resize=scale`; }
+            }
+        }
+        function openVNC() { window.open(`http://${document.getElementById('agv-ip').value}:6080/vnc.html?autoconnect=true&resize=scale`, '_blank'); }
+        function connectAGV() {
+            const ip = document.getElementById('agv-ip').value;
+            ros = new ROSLIB.Ros({ url: `ws://${ip}:9090` });
+            ros.on('connection', () => { document.getElementById('status-dot').classList.add('connected'); initRos(); document.getElementById('agv-ip').blur(); });
+            ros.on('error', () => { document.getElementById('status-dot').classList.remove('connected'); });
+            ros.on('close', () => { document.getElementById('status-dot').classList.remove('connected'); });
+        }
+        function initRos() {
+            cmdVel = new ROSLIB.Topic({ ros: ros, name: '/cmd_vel', messageType: 'geometry_msgs/msg/Twist' });
+            let odomSub = new ROSLIB.Topic({ ros: ros, name: '/odom', messageType: 'nav_msgs/msg/Odometry' });
+            odomSub.subscribe((msg) => {
+                document.getElementById('val-x').innerText = (msg.pose.pose.position.x >= 0 ? "+" : "") + msg.pose.pose.position.x.toFixed(2);
+                document.getElementById('val-y').innerText = (msg.pose.pose.position.y >= 0 ? "+" : "") + msg.pose.pose.position.y.toFixed(2);
+            });
+        }
+        function pubTwist(l, a) { if (cmdVel) cmdVel.publish(new ROSLIB.Message({ linear: {x: l, y:0, z:0}, angular: {x:0, y:0, z:a} })); }
+        function pubMove(l, a) { if (!isEStop) pubTwist(l, a); }
+        function pubStop() { pubTwist(0, 0); }
+        function emergencyStop() {
+            isEStop = !isEStop; const btn = document.getElementById('btn-estop');
+            if (isEStop) { pubTwist(0, 0); pubTwist(0, 0); btn.classList.add("locked"); } 
+            else { btn.classList.remove("locked"); pubTwist(0, 0); }
+        }
+        function handleKeyDown(e) {
+            if (document.activeElement.tagName === 'INPUT') return;
+            if (e.repeat) return; const key = e.key.toLowerCase();
+            if (key === ' ') { emergencyStop(); e.preventDefault(); return; }
+            if (isEStop) return;
+            if (['w','a','s','d'].includes(key)) {
+                activeKeys.add(key); document.getElementById('key-' + key).classList.add('pressed');
+                if(key==='w') pubMove(0.3,0); if(key==='s') pubMove(-0.3,0); if(key==='a') pubMove(0,0.6); if(key==='d') pubMove(0,-0.6);
+            }
+        }
+        function handleKeyUp(e) {
+            if (document.activeElement.tagName === 'INPUT') return; const key = e.key.toLowerCase();
+            if (['w','a','s','d'].includes(key)) {
+                activeKeys.delete(key); document.getElementById('key-' + key).classList.remove('pressed');
+                if (activeKeys.size === 0) pubStop();
+            }
+        }
+        window.addEventListener('blur', () => { activeKeys.clear(); document.querySelectorAll('.d-btn').forEach(b => b.classList.remove('pressed')); pubStop(); });
+
+        // ======= 视觉 AI 原生通信 =======
+        let visionWs = null;
+        let isAlarming = false;
+        let audioCtx = null;
+        let alarmInterval = null;
+        let personLostTimeout = null;
+
+        function connectVision() {
+            const ip = document.getElementById('camera-ip').value;
+            
+            if(!audioCtx) { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+            if(audioCtx.state === 'suspended') { audioCtx.resume(); }
+
+            if (visionWs) visionWs.close();
+            visionWs = new WebSocket(`ws://${ip}:8090`);
+            visionWs.binaryType = "arraybuffer";
+
+            visionWs.onopen = () => { 
+                document.getElementById('vision-dot').classList.add('connected');
+                setAlarmState(false);
+            };
+            visionWs.onclose = () => { document.getElementById('vision-dot').classList.remove('connected'); };
+            
+            visionWs.onmessage = (e) => {
+                try {
+                    const str = new TextDecoder().decode(new Uint8Array(e.data));
+                    const obj = JSON.parse(str);
+                    const data = obj.data || obj;
+                    
+                    if (data.image) {
+                        document.getElementById('stream-placeholder').style.display = 'none';
+                        document.getElementById('native-stream-img').src = `data:image/jpeg;base64,${data.image}`;
+                    }
+                    
+                    if (data.boxes) {
+                        const svg = document.getElementById('native-stream-svg');
+                        svg.innerHTML = ""; 
+                        data.boxes.forEach((box, i) => {
+                            if (box.length >= 5) {
+                                const [x, y, w, h, score] = box;
+                                const label = data.labels?.[i] || "unknown";
+                                const isPerson = String(label).toLowerCase() === 'person';
+                                const color = isPerson ? "#ef4444" : "#22c55e"; 
+
+                                const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+                                rect.setAttribute("x", x - w/2); rect.setAttribute("y", y - h/2);
+                                rect.setAttribute("width", w); rect.setAttribute("height", h);
+                                rect.setAttribute("fill", "none"); rect.setAttribute("stroke", color); rect.setAttribute("stroke-width", "4");
+                                svg.appendChild(rect);
+
+                                const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+                                text.setAttribute("x", x - w/2); text.setAttribute("y", y - h/2 - 8);
+                                text.setAttribute("fill", color); text.setAttribute("font-size", "28");
+                                text.setAttribute("font-family", "monospace"); text.setAttribute("font-weight", "bold");
+                                text.textContent = `${label} ${(score>1?score:score*100).toFixed(0)}%`;
+                                svg.appendChild(text);
+                            }
+                        });
+                    }
+
+                    const labels = data.labels || [];
+                    const hasPerson = labels.some(l => String(l).toLowerCase() === 'person');
+                    handleDetection(hasPerson, ip);
+                } catch(err) {}
+            };
+        }
+
+        function handleDetection(hasPerson, ip) {
+            if (hasPerson) {
+                clearTimeout(personLostTimeout); 
+
+                if (!isAlarming) {
+                    isAlarming = true;
+                    setAlarmState(true);
+                    startAlarmLoop();
+                    setTimeout(() => { fetchLatestImage(ip); }, 1500); 
+                }
+
+                personLostTimeout = setTimeout(() => {
+                    isAlarming = false;
+                    setAlarmState(false);
+                    stopAlarmLoop();
+                }, 2500);
+            }
+        }
+
+        function setAlarmState(active) {
+            const light = document.getElementById('alarm-light');
+            const text = document.getElementById('alarm-text');
+            const box = document.getElementById('alarm-box');
+            if (active) {
+                light.className = "alarm-light red-flash";
+                text.innerText = "⚠️ 发现入侵者！"; text.style.color = "#ef4444"; box.style.borderColor = "#991b1b";
+            } else {
+                light.className = "alarm-light green-steady";
+                text.innerText = "正常监控中"; text.style.color = "#22c55e"; box.style.borderColor = "#334155";
+            }
+        }
+
+        function startAlarmLoop() {
+            if(!audioCtx) return;
+            if(audioCtx.state === 'suspended') audioCtx.resume();
+            if(alarmInterval) clearInterval(alarmInterval);
+            
+            playBeep(); 
+            alarmInterval = setInterval(playBeep, 600); 
+        }
+
+        function stopAlarmLoop() {
+            if(alarmInterval) { clearInterval(alarmInterval); alarmInterval = null; }
+        }
+
+        function playBeep() {
+            if(!audioCtx) return;
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = 'triangle'; 
+            osc.frequency.setValueAtTime(880, audioCtx.currentTime); 
+            osc.frequency.setValueAtTime(1100, audioCtx.currentTime + 0.2); 
+            gain.gain.setValueAtTime(0.8, audioCtx.currentTime); 
+            gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.4);
+            osc.connect(gain); gain.connect(audioCtx.destination);
+            osc.start(); osc.stop(audioCtx.currentTime + 0.4);
+        }
+
+        async function fetchAPI(ip, path) {
+            try {
+                let res = await fetch(`http://${ip}:1880${path}`);
+                if(res.ok) return `http://${ip}:1880${path}`;
+            } catch(e) {}
+            return `http://${ip}${path}`;
+        }
+
+        async function fetchLatestImage(ip) {
+            const imgUrl = await fetchAPI(ip, `/api/latest?t=${Date.now()}`);
+            const img = document.getElementById('latest-photo');
+            img.src = imgUrl;
+            img.onload = () => { img.style.display = 'block'; document.getElementById('photo-placeholder').style.display = 'none'; };
+        }
+
+        async function openGallery() {
+            const ip = document.getElementById('camera-ip').value;
+            const grid = document.getElementById('gallery-grid');
+            grid.innerHTML = "<p style='color:#94a3b8;'>数据拉取中...</p>";
+            document.getElementById('gallery-modal').style.display = "block";
+            
+            const apiUrl = await fetchAPI(ip, `/api/images`);
+            fetch(apiUrl)
+                .then(r => r.json())
+                .then(files => {
+                    grid.innerHTML = "";
+                    if(!files || files.length === 0) { grid.innerHTML = "<p style='color:#94a3b8;'>暂无历史照片</p>"; return; }
+                    files.forEach(file => {
+                        const imgUrl = apiUrl.replace('/api/images', `/api/image?file=${file}`);
+                        const div = document.createElement('div');
+                        div.className = 'gallery-item';
+                        div.innerHTML = `<img src="${imgUrl}" onclick="window.open('${imgUrl}')"><span>${file}</span>`;
+                        grid.appendChild(div);
+                    });
+                })
+                .catch(e => { grid.innerHTML = "<p style='color:#ef4444;'>获取失败，请确保 Node-RED 中已导入了对应的 JSON 代码。</p>"; });
+        }
+    </script>
+</body>
+</html>

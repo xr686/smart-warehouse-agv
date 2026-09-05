@@ -1,0 +1,351 @@
+[
+    {
+        "id": "af09a2b1dd0f9df2",
+        "type": "tab",
+        "label": "流程 1",
+        "disabled": false,
+        "info": "",
+        "env": []
+    },
+    {
+        "id": "247f2fe3c6ac487e",
+        "type": "sscma",
+        "host": "localhost",
+        "mqttport": "1883",
+        "apiport": "80",
+        "clientid": "recamera",
+        "username": "",
+        "password": ""
+    },
+    {
+        "id": "f5232b43f7245aad",
+        "type": "camera",
+        "z": "af09a2b1dd0f9df2",
+        "name": "",
+        "client": "247f2fe3c6ac487e",
+        "audio": true,
+        "volume": 80,
+        "option": 0,
+        "fps": 30,
+        "mirror": false,
+        "flip": false,
+        "x": 65,
+        "y": 20,
+        "wires": [
+            [
+                "7bfcaea5839ffaae",
+                "de1dfd28728ab067"
+            ]
+        ]
+    },
+    {
+        "id": "7bfcaea5839ffaae",
+        "type": "model",
+        "z": "af09a2b1dd0f9df2",
+        "name": "",
+        "uri": "/usr/share/supervisor/models/yolo11n_detection_cv181x_int8.cvimodel",
+        "model": "car3_prueba.cvimodel",
+        "tscore": 0.45,
+        "tiou": 0.25,
+        "debug": false,
+        "trace": false,
+        "counting": false,
+        "draw": false,
+        "classes": "car,free",
+        "splitter": "0,0,0,0",
+        "previewResolution": "1920x1080",
+        "previewFps": 30,
+        "client": "247f2fe3c6ac487e",
+        "x": 215,
+        "y": 20,
+        "wires": [
+            [
+                "7321fb5f520fd586"
+            ]
+        ]
+    },
+    {
+        "id": "7321fb5f520fd586",
+        "type": "function",
+        "z": "af09a2b1dd0f9df2",
+        "name": "Person Filter & Trigger",
+        "func": "const labels = msg.payload?.data?.labels || [];\nconst hasPerson = labels.some(l => String(l).toLowerCase() === 'person');\nconst lastTrigger = flow.get('lastTriggerTime') || 0;\nconst now = Date.now();\n\nif (hasPerson && (now - lastTrigger > 5000)) {\n    flow.set('lastTriggerTime', now);\n    return { payload: \"capture\", enabled: true };\n}\nreturn null;",
+        "outputs": 1,
+        "x": 485,
+        "y": 20,
+        "wires": [
+            [
+                "de1dfd28728ab067"
+            ]
+        ]
+    },
+    {
+        "id": "de1dfd28728ab067",
+        "type": "capture",
+        "z": "af09a2b1dd0f9df2",
+        "name": "Save to Local",
+        "interval": "5",
+        "timeUnit": "1",
+        "storage": "local",
+        "duration": 0,
+        "durationUnit": "1",
+        "captureMode": "trigger",
+        "startMode": "msg",
+        "client": "247f2fe3c6ac487e",
+        "x": 685,
+        "y": 20,
+        "wires": []
+    },
+    {
+        "id": "http_api_list_get",
+        "type": "http in",
+        "z": "af09a2b1dd0f9df2",
+        "name": "API: Image List",
+        "url": "/api/images",
+        "method": "get",
+        "upload": false,
+        "x": 115,
+        "y": 160,
+        "wires": [
+            [
+                "exec_list_all"
+            ]
+        ]
+    },
+    {
+        "id": "exec_list_all",
+        "type": "exec",
+        "z": "af09a2b1dd0f9df2",
+        "command": "ls /userdata/Images/ | grep jpg | sort -r",
+        "addpay": "",
+        "append": "",
+        "useSpawn": "false",
+        "timer": "",
+        "winHide": false,
+        "oldrc": false,
+        "x": 405,
+        "y": 160,
+        "wires": [
+            [
+                "func_parse_list"
+            ],
+            [],
+            []
+        ]
+    },
+    {
+        "id": "func_parse_list",
+        "type": "function",
+        "z": "af09a2b1dd0f9df2",
+        "name": "Parse to JSON Array",
+        "func": "let files = msg.payload.split('\\n').map(x => x.trim()).filter(x => x.length > 0);\nmsg.payload = files;\nmsg.headers = { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json' };\nreturn msg;",
+        "outputs": 1,
+        "x": 585,
+        "y": 160,
+        "wires": [
+            [
+                "http_res_list"
+            ]
+        ]
+    },
+    {
+        "id": "http_res_list",
+        "type": "http response",
+        "z": "af09a2b1dd0f9df2",
+        "name": "",
+        "statusCode": "",
+        "headers": {},
+        "x": 725,
+        "y": 160,
+        "wires": []
+    },
+    {
+        "id": "http_api_latest_get",
+        "type": "http in",
+        "z": "af09a2b1dd0f9df2",
+        "name": "API: Latest Photo",
+        "url": "/api/latest",
+        "method": "get",
+        "upload": false,
+        "x": 125,
+        "y": 240,
+        "wires": [
+            [
+                "exec_find_latest"
+            ]
+        ]
+    },
+    {
+        "id": "exec_find_latest",
+        "type": "exec",
+        "z": "af09a2b1dd0f9df2",
+        "command": "ls /userdata/Images/ | grep jpg | sort -r | head -n 1",
+        "addpay": "",
+        "append": "",
+        "useSpawn": "false",
+        "timer": "",
+        "winHide": false,
+        "oldrc": false,
+        "x": 455,
+        "y": 240,
+        "wires": [
+            [
+                "func_prep_file"
+            ],
+            [],
+            []
+        ]
+    },
+    {
+        "id": "func_prep_file",
+        "type": "function",
+        "z": "af09a2b1dd0f9df2",
+        "name": "Set Filename",
+        "func": "let f = msg.payload ? msg.payload.toString().trim() : \"\";\nif (!f) {\n    msg.statusCode = 404;\n    msg.payload = \"Not found\";\n    return [null, msg];\n}\nmsg.filename = '/userdata/Images/' + f;\nreturn [msg, null];",
+        "outputs": 2,
+        "x": 545,
+        "y": 240,
+        "wires": [
+            [
+                "file_read_latest"
+            ],
+            [
+                "http_res_latest"
+            ]
+        ]
+    },
+    {
+        "id": "file_read_latest",
+        "type": "file in",
+        "z": "af09a2b1dd0f9df2",
+        "name": "",
+        "filename": "filename",
+        "filenameType": "msg",
+        "format": "",
+        "chunk": false,
+        "sendError": false,
+        "encoding": "none",
+        "allProps": false,
+        "x": 715,
+        "y": 240,
+        "wires": [
+            [
+                "func_header_jpeg"
+            ]
+        ]
+    },
+    {
+        "id": "func_header_jpeg",
+        "type": "function",
+        "z": "af09a2b1dd0f9df2",
+        "name": "Set Header",
+        "func": "msg.headers = { 'Content-Type': 'image/jpeg', 'Access-Control-Allow-Origin': '*' };\nreturn msg;",
+        "outputs": 1,
+        "x": 885,
+        "y": 240,
+        "wires": [
+            [
+                "http_res_latest"
+            ]
+        ]
+    },
+    {
+        "id": "http_res_latest",
+        "type": "http response",
+        "z": "af09a2b1dd0f9df2",
+        "name": "",
+        "statusCode": "",
+        "headers": {},
+        "x": 1025,
+        "y": 240,
+        "wires": []
+    },
+    {
+        "id": "http_api_single_get",
+        "type": "http in",
+        "z": "af09a2b1dd0f9df2",
+        "name": "API: Single Image",
+        "url": "/api/image",
+        "method": "get",
+        "upload": false,
+        "x": 135,
+        "y": 320,
+        "wires": [
+            [
+                "func_prep_single"
+            ]
+        ]
+    },
+    {
+        "id": "func_prep_single",
+        "type": "function",
+        "z": "af09a2b1dd0f9df2",
+        "name": "Get Path from Query",
+        "func": "let f = msg.req.query.file;\nif (!f || f.indexOf('..') !== -1) {\n    msg.statusCode = 400;\n    msg.payload = \"Invalid\";\n    return [null, msg];\n}\nmsg.filename = '/userdata/Images/' + f;\nreturn [msg, null];",
+        "outputs": 2,
+        "x": 365,
+        "y": 320,
+        "wires": [
+            [
+                "file_read_single"
+            ],
+            [
+                "http_res_single"
+            ]
+        ]
+    },
+    {
+        "id": "file_read_single",
+        "type": "file in",
+        "z": "af09a2b1dd0f9df2",
+        "name": "",
+        "filename": "filename",
+        "filenameType": "msg",
+        "format": "",
+        "chunk": false,
+        "sendError": false,
+        "encoding": "none",
+        "allProps": false,
+        "x": 515,
+        "y": 320,
+        "wires": [
+            [
+                "func_header_single"
+            ]
+        ]
+    },
+    {
+        "id": "func_header_single",
+        "type": "function",
+        "z": "af09a2b1dd0f9df2",
+        "name": "Set Header",
+        "func": "msg.headers = { 'Content-Type': 'image/jpeg', 'Access-Control-Allow-Origin': '*' };\nreturn msg;",
+        "outputs": 1,
+        "x": 685,
+        "y": 320,
+        "wires": [
+            [
+                "http_res_single"
+            ]
+        ]
+    },
+    {
+        "id": "http_res_single",
+        "type": "http response",
+        "z": "af09a2b1dd0f9df2",
+        "name": "",
+        "statusCode": "",
+        "headers": {},
+        "x": 825,
+        "y": 320,
+        "wires": []
+    },
+    {
+        "id": "4168381ea63675f2",
+        "type": "global-config",
+        "env": [],
+        "modules": {
+            "node-red-contrib-sscma": "0.3.6"
+        }
+    }
+]

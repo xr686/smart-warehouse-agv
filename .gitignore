@@ -1,0 +1,41 @@
+# ---- ROS 2 / colcon ----
+build/
+install/
+log/
+*.bag
+*.db3
+*.mcap
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+venv/
+.venv/
+.pytest_cache/
+
+# ---- C/C++ ----
+*.o
+*.a
+*.so
+*.out
+CMakeLists.txt.user
+
+# ---- Node.js / Node-RED ----
+node_modules/
+*.log
+npm-debug.log*
+
+# ---- 编辑器 / 系统 ----
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ---- 其它 ----
+*.tmp
+temp/
